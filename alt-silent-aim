@@ -1,11 +1,9 @@
+--- START OF FILE Paste August 01, 2026 - FIXED ---
+
 --NU-FWQ
 --[[
 Integrated ESP LocalScript with Rayfield UI, Role Detection, Team Locking,
 Enhanced Hint Matching, CUSTOMIZABLE NAMETAGS, and Aimbot.
-UPDATED: 
-- Fixed Hint Matching to read from RSOD > HintsScrollFrame > TextLaba 
-- Fixed Team War to use TEAM1/TEAM2 objects instead of distance
-- Replaced FastCast Actor Aimbot with inflict FireServer Hook & Manual Fire
 ]]
 
 -- Load Rayfield
@@ -298,7 +296,6 @@ local stopEspLoop = false
 local espPlayerAddedConnection = nil
 local espCharacterAddedConnections = {}
 
--- CHANGED: Renamed from distance to team for logical consistency
 local rolesLockedByTeam = false 
 local lockedTeamRoles = {} 
 
@@ -313,42 +310,46 @@ local playerRoles = {}
 -- Aimbot targeting modes
 local bulletRedirectionModes = {"Killer"} 
 
--- Function to get character name from NPCSFolder
+-- Safe Function to get character name from NPCSFolder
 local function getCharacterName(player)
-    if NPCSFolder then
-        local playerNPCModel = NPCSFolder:FindFirstChild(player.Name)
-        if playerNPCModel then
-            local charNameValue = playerNPCModel:FindFirstChild("CharacterName") 
-                or playerNPCModel:FindFirstChild("NPCName")
-                or playerNPCModel:FindFirstChild("Name")
-            
-            if charNameValue and charNameValue:IsA("StringValue") then
-                return charNameValue.Value
-            end
-            
-            local configObject = playerNPCModel:FindFirstChild("Configuration")
-            if configObject then
-                local nameInConfig = configObject:FindFirstChild("CharacterName")
-                    or configObject:FindFirstChild("NPCName")
-                    or configObject:FindFirstChild("Name")
+    if not player then return "" end
+    local success, result = pcall(function()
+        if NPCSFolder then
+            local playerNPCModel = NPCSFolder:FindFirstChild(player.Name)
+            if playerNPCModel then
+                local charNameValue = playerNPCModel:FindFirstChild("CharacterName") 
+                    or playerNPCModel:FindFirstChild("NPCName")
+                    or playerNPCModel:FindFirstChild("Name")
                 
-                if nameInConfig and nameInConfig:IsA("StringValue") then
-                    return nameInConfig.Value
+                if charNameValue and charNameValue:IsA("StringValue") then
+                    return charNameValue.Value
+                end
+                
+                local configObject = playerNPCModel:FindFirstChild("Configuration")
+                if configObject then
+                    local nameInConfig = configObject:FindFirstChild("CharacterName")
+                        or configObject:FindFirstChild("NPCName")
+                        or configObject:FindFirstChild("Name")
+                    
+                    if nameInConfig and nameInConfig:IsA("StringValue") then
+                        return nameInConfig.Value
+                    end
+                end
+                
+                local humanoid = playerNPCModel:FindFirstChildOfClass("Humanoid")
+                if humanoid and humanoid.DisplayName ~= player.Name then
+                    return humanoid.DisplayName
                 end
             end
-            
-            local humanoid = playerNPCModel:FindFirstChildOfClass("Humanoid")
-            if humanoid and humanoid.DisplayName ~= player.Name then
-                return humanoid.DisplayName
-            end
         end
-    end
-    return player.Name 
+        return player.Name
+    end)
+    return (success and result) and result or player.Name 
 end
 
--- OPTIMIZED: Tag player by role without destroying/recreating instances every frame
+-- Tag player by role
 local function tagPlayer(player, roleColor, labelText)
-    if not player.Character then return end
+    if not player or not player.Character then return end
     
     local head = player.Character:FindFirstChild("Head")
     if not head then return end
@@ -451,8 +452,10 @@ local function updateDroppedGunEsp()
                     droppedGunConnections[obj] = obj.AncestryChanged:Connect(function()
                         if not obj.Parent then
                             clearDroppedGunEsp(obj)
-                            droppedGunConnections[obj]:Disconnect()
-                            droppedGunConnections[obj] = nil
+                            if droppedGunConnections[obj] then
+                                droppedGunConnections[obj]:Disconnect()
+                                droppedGunConnections[obj] = nil
+                            end
                         end
                     end)
                 end
@@ -475,6 +478,8 @@ end
 
 local function collectPlayerTools(player)
     local tools = {}
+    if not player then return tools end
+    
     local backpack = player:FindFirstChildOfClass("Backpack")
     if backpack then
         for _, tool in ipairs(backpack:GetChildren()) do
@@ -511,12 +516,10 @@ local function getStandardRoleFromWeapons(toolsByName)
     return nil, nil, nil
 end
 
--- NEW: Parse the new hint format from TextLaba
 local function parseNewHintText(text)
     local targetNumber = 1
     local content = text
     
-    -- Check for target number prefix like "[TARGET 1] " or "[TARGET 2] "
     local targetMatch = text:match("^%[TARGET%s+%d+%]%s*")
     if targetMatch then
         targetNumber = tonumber(text:match("^%[TARGET%s+(%d+)%]"))
@@ -525,7 +528,6 @@ local function parseNewHintText(text)
     
     content = content:match("^%s*(.-)%s*$") -- trim
     
-    -- Check if it's a task
     local taskMatch = content:match("^Their task%s*:%s*(.*)$")
     if taskMatch then
         return targetNumber, "task", taskMatch:match("^%s*(.-)%s*$")
@@ -534,11 +536,10 @@ local function parseNewHintText(text)
     end
 end
 
--- UPDATED: Read hints from RSOD > HintsScrollFrame > TextLaba
 local function updateMatchingHintPlayers()
     playersMatchingHints = {}
 
-    local RSOD = lp:FindFirstChild("RSOD") or lp.PlayerGui:FindFirstChild("RSOD")
+    local RSOD = lp:FindFirstChild("RSOD") or (lp:FindFirstChild("PlayerGui") and lp.PlayerGui:FindFirstChild("RSOD"))
     if not RSOD then return end
     
     local HintsScrollFrame = RSOD:FindFirstChild("HintsScrollFrame")
@@ -631,9 +632,7 @@ local function detectRoles()
     local killerGunHoldersCount = 0
     local singleKillerGunHolderCandidate = nil
     
-    -- Cache tools to prevent redundant iterations
     local cachedTools = {}
-
     playerRoles = {}
 
     for _, player in ipairs(Players:GetPlayers()) do
@@ -700,8 +699,8 @@ local function detectRoles()
         if player ~= lp then otherPlayersWithCharCount = otherPlayersWithCharCount + 1 end
     end
 
-        -- Check for Team War mode by seeing if LocalPlayer has TEAM1 or TEAM2
-    local localNPC = NPCSFolder:FindFirstChild(lp.Name)
+    -- Check for Team War mode
+    local localNPC = NPCSFolder and NPCSFolder:FindFirstChild(lp.Name)
     if localNPC then
         if localNPC:FindFirstChild("TEAM1") or localNPC:FindFirstChild("TEAM2") then
             everyoneHasGunConditionMet = true 
@@ -721,41 +720,38 @@ local function detectRoles()
 
     local higherPriorityActive = newHighestPriorityKillerDetected or specificJuggernautDetected or specialKillerDetected
     
-    -- FIXED: Team War logic (No longer uses distance)
+    -- Dynamic Team War Role Evaluation
     if higherPriorityActive or noOneHasGunConditionMet then
-        if rolesLockedByTeam then
-            rolesLockedByTeam = false
-            lockedTeamRoles = {}
-        end
+        rolesLockedByTeam = false
+        lockedTeamRoles = {}
     elseif everyoneHasGunConditionMet then
-        if not rolesLockedByTeam then
-            rolesLockedByTeam = true
-            lockedTeamRoles = {} 
-            
-            -- Determine LocalPlayer's team
-            local localNPC = NPCSFolder:FindFirstChild(lp.Name)
-            local localTeam = nil
-            if localNPC then
-                if localNPC:FindFirstChild("TEAM1") then
-                    localTeam = "TEAM1"
-                elseif localNPC:FindFirstChild("TEAM2") then
-                    localTeam = "TEAM2"
-                end
+        rolesLockedByTeam = true
+        lockedTeamRoles = {} 
+        
+        local localTeam = nil
+        if localNPC then
+            if localNPC:FindFirstChild("TEAM1") then
+                localTeam = "TEAM1"
+            elseif localNPC:FindFirstChild("TEAM2") then
+                localTeam = "TEAM2"
             end
-            
-            for player, _ in pairs(playersWithValidCharacters) do
-                local playerNPC = NPCSFolder:FindFirstChild(player.Name)
-                if playerNPC and localTeam then
-                    if playerNPC:FindFirstChild(localTeam) then
-                        lockedTeamRoles[player] = "Innocent"
-                    else
-                        lockedTeamRoles[player] = "Killer"
-                    end
+        end
+        
+        for player, _ in pairs(playersWithValidCharacters) do
+            local playerNPC = NPCSFolder and NPCSFolder:FindFirstChild(player.Name)
+            if playerNPC and localTeam then
+                if playerNPC:FindFirstChild(localTeam) then
+                    lockedTeamRoles[player] = "Innocent"
                 else
                     lockedTeamRoles[player] = "Killer"
                 end
+            else
+                lockedTeamRoles[player] = "Killer"
             end
         end
+    else
+        rolesLockedByTeam = false
+        lockedTeamRoles = {}
     end
 
     updateMatchingHintPlayers()
@@ -768,7 +764,7 @@ local function detectRoles()
                 if player == theSpecificJuggernautHolder then
                     playerRoles[player] = {label = killerLabel, color = killerColor}
                 else
-                    local toolsByName = cachedTools[player]
+                    local toolsByName = cachedTools[player] or {}
                     local hasAnyRoleWeapon = false
                     for name, _ in pairs(toolsByName) do
                         if allRoleWeapons[name] then hasAnyRoleWeapon = true; break end
@@ -789,6 +785,8 @@ local function detectRoles()
                     playerRoles[player] = {label = killerLabel, color = killerColor}
                 elseif lockedRole == "Innocent" then
                     playerRoles[player] = {label = innocentLabel, color = innocentColor}
+                else
+                    playerRoles[player] = {label = killerLabel, color = killerColor}
                 end
             elseif playersMatchingHints[player] and playersWithVigilanteWeapons[player] then
                 playerRoles[player] = {label = vigilanteHintLabel, color = vigilanteHintColor}
@@ -797,7 +795,7 @@ local function detectRoles()
             elseif playersMatchingHints[player] then
                 playerRoles[player] = {label = hintMatchLabel, color = hintMatchColor}
             else
-                local toolsByName = cachedTools[player]
+                local toolsByName = cachedTools[player] or {}
                 local standardRole, standardColor, standardLabel = getStandardRoleFromWeapons(toolsByName)
                 if standardRole then
                     playerRoles[player] = {label = standardLabel, color = standardColor}
@@ -832,7 +830,7 @@ local function disableEsp()
     if espEnabled then
         espEnabled = false
         stopEspLoop = true
-                if espPlayerAddedConnection then 
+        if espPlayerAddedConnection then 
             espPlayerAddedConnection:Disconnect() 
             espPlayerAddedConnection = nil
         end
@@ -870,7 +868,7 @@ Tab:CreateDropdown({
     Flag = "NametagModeDropdown",
     Callback = function(Option)
         nametagMode = Option[1] or "Role"
-        if espEnabled then updateEspVisuals() end
+        if espEnabled then pcall(updateEspVisuals) end
     end,
 })
 
@@ -884,20 +882,20 @@ Tab:CreateButton({
             stopEspLoop = false
             task.spawn(function()
                 while espEnabled and not stopEspLoop do
-                    updateEspVisuals()
+                    pcall(updateEspVisuals)
                     task.wait(0.5)
                 end
             end)
             espPlayerAddedConnection = game.Players.PlayerAdded:Connect(function(player)
-                local charAddedConn = player.CharacterAdded:Connect(function() task.wait(0.1); updateEspVisuals() end)
+                local charAddedConn = player.CharacterAdded:Connect(function() task.wait(0.1); pcall(updateEspVisuals) end)
                 espCharacterAddedConnections[player] = charAddedConn
-                if player.Character then task.wait(0.1); updateEspVisuals() end
+                if player.Character then task.wait(0.1); pcall(updateEspVisuals) end
             end)
             game.Players.PlayerRemoving:Connect(function(player)
                 if espCharacterAddedConnections[player] then espCharacterAddedConnections[player]:Disconnect() end
                 if player.Character then clearOldStuff(player.Character) end
             end)
-            updateEspVisuals()
+            pcall(updateEspVisuals)
         end
     end
 })
@@ -912,7 +910,7 @@ BloodFolder.ChildRemoved:Connect(function(child)
 end)
 
 -- ====================================
--- AIMBOT SECTION (ALTERNATIVE METHOD)
+-- AIMBOT SECTION
 -- ====================================
 local AimbotTab = Window:CreateTab("Aimbot")
 local LocalAimbotConfig = {HitChance = 100, wallcheck = false, TargetParts = {"Torso"}, radius = 150, aimbotEnabled = true, fovVisible = true}
@@ -957,22 +955,24 @@ end
 local currentValidTargets = {}
 task.spawn(function()
     while true do
-        detectRoles()
-        currentValidTargets = {}
-        for player, data in pairs(playerRoles) do
-            if data then
-                local shouldTarget = false
-                if tableContains(bulletRedirectionModes, "Killer") and (data.label == killerLabel or data.label == killerHintLabel) then shouldTarget = true end
-                if tableContains(bulletRedirectionModes, "Vigilante") and (data.label == vigilanteLabel or data.label == vigilanteHintLabel) then shouldTarget = true end
-                if tableContains(bulletRedirectionModes, "Innocent") and (data.label == innocentLabel or data.label == hintMatchLabel) then shouldTarget = true end
-                if shouldTarget then currentValidTargets[player] = true end
+        pcall(function()
+            detectRoles()
+            currentValidTargets = {}
+            for player, data in pairs(playerRoles) do
+                if data then
+                    local shouldTarget = false
+                    if tableContains(bulletRedirectionModes, "Killer") and (data.label == killerLabel or data.label == killerHintLabel) then shouldTarget = true end
+                    if tableContains(bulletRedirectionModes, "Vigilante") and (data.label == vigilanteLabel or data.label == vigilanteHintLabel) then shouldTarget = true end
+                    if tableContains(bulletRedirectionModes, "Innocent") and (data.label == innocentLabel or data.label == hintMatchLabel) then shouldTarget = true end
+                    if shouldTarget then currentValidTargets[player] = true end
+                end
             end
-        end
+        end)
         task.wait(0.5)
     end
 end)
 
--- Alternative Silent Aim Logic
+-- Silent Aim Raycasting & Targeting
 local UserInputService = game:GetService("UserInputService")
 local inflict = ReplicatedStorage:WaitForChild("gun_res", 30):WaitForChild("evt", 30):WaitForChild("inflict", 30)
 
@@ -981,15 +981,21 @@ rcParams.FilterType = Enum.RaycastFilterType.Exclude
 rcParams.IgnoreWater = true
 
 local function isVisiblePart(partPos, char)
-    rcParams.FilterDescendantsInstances = { Camera }
+    if not char or not char:IsDescendantOf(workspace) then return false end
+    
+    local filter = { Camera }
     if lp.Character then 
-        table.insert(rcParams.FilterDescendantsInstances, lp.Character) 
+        table.insert(filter, lp.Character) 
     end
-    local hit = workspace:Raycast(Camera.CFrame.Position, partPos - Camera.CFrame.Position, rcParams)
+    rcParams.FilterDescendantsInstances = filter
+
+    local rayOrigin = Camera.CFrame.Position
+    local hit = workspace:Raycast(rayOrigin, partPos - rayOrigin, rcParams)
+    
     if not hit then return true end
     local p = hit.Instance
     while p and p ~= workspace do
-        if p == char or p:FindFirstChildOfClass("Humanoid") then return true end
+        if p == char or p:IsDescendantOf(char) or p:FindFirstChildOfClass("Humanoid") then return true end
         p = p.Parent
     end
     return false
@@ -1005,30 +1011,32 @@ local function getAimbotTarget()
         targetParts = {"Torso"} 
     end
 
-    -- FIRST PASS: Find the absolute best player to aim at based on the closest valid part
+    -- FIRST PASS: Identify closest target player
     for player, _ in pairs(currentValidTargets) do
-        if player ~= lp and player.Character then
+        if player and player ~= lp and player.Parent == Players then
             local char = player.Character
-            local hum = char:FindFirstChildOfClass("Humanoid")
-            if hum and hum.Health > 0 then
-                for _, partName in ipairs(targetParts) do
-                    local p = char:FindFirstChild(partName)
-                    if p then
-                        local partPos = p.Position
-                        local viewportPoint, onScreen = Camera:WorldToViewportPoint(partPos)
-                        if onScreen and viewportPoint.Z > 0 then
-                            local screenDistance = (Vector2.new(viewportPoint.X, viewportPoint.Y) - screenCenter).Magnitude
-                            if screenDistance <= LocalAimbotConfig.radius then
-                                local skip = false
-                                if LocalAimbotConfig.wallcheck then
-                                    if not isVisiblePart(partPos, char) then 
-                                        skip = true 
+            if char and char:IsDescendantOf(workspace) then
+                local hum = char:FindFirstChildOfClass("Humanoid")
+                if hum and hum.Health > 0 then
+                    for _, partName in ipairs(targetParts) do
+                        local p = char:FindFirstChild(partName)
+                        if p and p:IsA("BasePart") then
+                            local partPos = p.Position
+                            local viewportPoint, onScreen = Camera:WorldToViewportPoint(partPos)
+                            if onScreen and viewportPoint.Z > 0 then
+                                local screenDistance = (Vector2.new(viewportPoint.X, viewportPoint.Y) - screenCenter).Magnitude
+                                if screenDistance <= LocalAimbotConfig.radius then
+                                    local skip = false
+                                    if LocalAimbotConfig.wallcheck then
+                                        if not isVisiblePart(partPos, char) then 
+                                            skip = true 
+                                        end
                                     end
-                                end
-                                if not skip then
-                                    if screenDistance < bestScore then
-                                        bestScore = screenDistance
-                                        bestPlayer = player
+                                    if not skip then
+                                        if screenDistance < bestScore then
+                                            bestScore = screenDistance
+                                            bestPlayer = player
+                                        end
                                     end
                                 end
                             end
@@ -1039,26 +1047,28 @@ local function getAimbotTarget()
         end
     end
 
-    -- SECOND PASS: Once the best player is found, gather all their valid parts and pick one at random
-    if bestPlayer then
-        local validParts = {}
+    -- SECOND PASS: Pick random target part from chosen player
+    if bestPlayer and bestPlayer.Parent == Players then
         local char = bestPlayer.Character
-        for _, partName in ipairs(targetParts) do
-            local p = char:FindFirstChild(partName)
-            if p then 
-                local isVisible = true
-                if LocalAimbotConfig.wallcheck then
-                    if not isVisiblePart(p.Position, char) then
-                        isVisible = false
+        if char and char:IsDescendantOf(workspace) then
+            local validParts = {}
+            for _, partName in ipairs(targetParts) do
+                local p = char:FindFirstChild(partName)
+                if p and p:IsA("BasePart") then 
+                    local isVisible = true
+                    if LocalAimbotConfig.wallcheck then
+                        if not isVisiblePart(p.Position, char) then
+                            isVisible = false
+                        end
+                    end
+                    if isVisible then
+                        table.insert(validParts, p) 
                     end
                 end
-                if isVisible then
-                    table.insert(validParts, p) 
-                end
             end
-        end
-        if #validParts > 0 then
-            return bestPlayer, validParts[Random.new():NextInteger(1, #validParts)]
+            if #validParts > 0 then
+                return bestPlayer, validParts[Random.new():NextInteger(1, #validParts)]
+            end
         end
     end
     
@@ -1075,29 +1085,34 @@ end
 
 local function fireInflict(player, part, tool)
     if not player or not part or not tool then return end
-    local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+    local char = player.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
     if not hum then return end
     inflict:FireServer(tool, hum, part, workspace:GetServerTimeNow(), { pos=part.Position, size=part.Size })
 end
 
--- Fallback Manual Fire Variables
+-- Fallback Manual Fire
 local SA_LastFire = 0
 local SA_MinInterval = 0.1
 
--- Setup Hook
+-- Setup Hook safely
 local origFireServer, hookOk = nil, false
 if typeof(hookfunction)=="function" and typeof(newcclosure)=="function" then
     local hookedSelf = inflict
     pcall(function()
         origFireServer = hookfunction(inflict.FireServer, newcclosure(function(self, ...)
             if LocalAimbotConfig.aimbotEnabled and self == hookedSelf then
-                if math.floor(Random.new():NextNumber(0, 1) * 100) / 100 <= LocalAimbotConfig.HitChance / 100 then
-                    local targetPlayer, targetPart = getAimbotTarget()
-                    if targetPlayer and targetPart then
-                        local targetHum = targetPlayer.Character and targetPlayer.Character:FindFirstChildOfClass("Humanoid")
-                        if targetHum then
+                local hitRoll = Random.new():NextNumber(0, 100)
+                if hitRoll <= LocalAimbotConfig.HitChance then
+                    local success, targetPlayer, targetPart = pcall(getAimbotTarget)
+                    if success and targetPlayer and targetPart and targetPart:IsDescendantOf(workspace) then
+                        local targetChar = targetPlayer.Character
+                        local targetHum = targetChar and targetChar:FindFirstChildOfClass("Humanoid")
+                        if targetHum and targetHum.Health > 0 then
                             local a, b, c, d, e = ...
-                            return origFireServer(self, a, targetHum, targetPart, d, { pos=targetPart.Position, size=targetPart.Size })
+                            local pos = targetPart.Position
+                            local size = targetPart.Size
+                            return origFireServer(self, a, targetHum, targetPart, d, { pos = pos, size = size })
                         end
                     end
                 end
@@ -1115,12 +1130,12 @@ if not hookOk then
         if UserInputService:GetFocusedTextBox() then return end
         if os.clock() - SA_LastFire < SA_MinInterval then return end
         
-        local targetPlayer, targetPart = getAimbotTarget()
-        if not targetPlayer or not targetPart then return end
+        local success, targetPlayer, targetPart = pcall(getAimbotTarget)
+        if not success or not targetPlayer or not targetPart then return end
         local tool = resolveTool()
         if not tool then return end
         
-        if math.floor(Random.new():NextNumber(0, 1) * 100) / 100 <= LocalAimbotConfig.HitChance / 100 then
+        if Random.new():NextNumber(0, 100) <= LocalAimbotConfig.HitChance then
             SA_LastFire = os.clock()
             fireInflict(targetPlayer, targetPart, tool)
         end
