@@ -6,8 +6,6 @@ UPDATED:
 - Fixed Hint Matching to read from RSOD > HintsScrollFrame > TextLaba 
 - Fixed Team War to use TEAM1/TEAM2 objects instead of distance
 - Replaced FastCast Actor Aimbot with inflict FireServer Hook & Manual Fire
-- Fixed Part Randomization (Two-Pass targeting system)
-- Fixed double-fire bug caused by hook & manual fire overlapping
 ]]
 
 -- Load Rayfield
