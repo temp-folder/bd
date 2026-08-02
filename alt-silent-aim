@@ -1,11 +1,7 @@
---- START OF FILE ---
-
+---NU-FWQ
 --[[
 Integrated ESP LocalScript with Rayfield UI, Role Detection, Team Locking,
-Enhanced Hint Matching, CUSTOMIZABLE NAMETAGS, and DIRECT INFLICT SILENT AIM.
-UPDATED: 
-- Integrated Method 2 Direct 'inflict' Remote Silent Aim Engine (No Actor/FastCast required)
-- Preserved all Role Detector logic, RSOD hint matching, Team War fixes, ESP, and UI
+Enhanced Hint Matching, CUSTOMIZABLE NAMETAGS, and Inflict Silent Aim.
 ]]
 
 -- Load Rayfield
@@ -76,7 +72,8 @@ local killerWeapons = {
     ["Door'bler TIGERSTRIPES"] = true, 
     ["Anatoly's JS-22"] = true,
     ["PLASTIC JS-22"] = true, 
-    ["JTS225-OBREZ"] = true, ["HEARDBALLA"] = true,
+    ["JTS225-OBREZ"] = true, 
+    ["HEARDBALLA"] = true,
     ["Whiteout Rosen-Obrez"] = true, 
     ["Whiteout RR-LCP"] = true, 
     ["JTS225-Obrez Monochrome"] = true,
@@ -88,7 +85,7 @@ local killerWeapons = {
     ["JTS225-Obrez Poly"] = true, 
     ["Mares Leg10"] = true,
     ["RR-LCP10"] = true,
-    ["JTS225-Obrez Partycannon"] = true, 
+    ["Party Cannon JTS225-Obrez"] = true, 
     ["Bandages"] = true, 
     ["corrodedmetal JS-22"] = true,
     ["CharcoalSteel JS-44"] = true, 
@@ -294,9 +291,9 @@ local BloodFolder = Workspace:WaitForChild("BloodFolder")
 local Camera = Workspace.CurrentCamera
 
 -- Get the inflict remote from ReplicatedStorage (used in Method 2 Silent Aim)
-local inflictRemote = ReplicatedStorage:WaitForChild("gun_res", 10) 
-    and ReplicatedStorage.gun_res:WaitForChild("evt", 10) 
-    and ReplicatedStorage.gun_res.evt:WaitForChild("inflict", 10)
+local gunRes = ReplicatedStorage:WaitForChild("gun_res", 10)
+local evtFolder = gunRes and gunRes:WaitForChild("evt", 10)
+local inflictRemote = evtFolder and evtFolder:WaitForChild("inflict", 10)
 
 -- Helper function
 local function tableContains(tbl, value)
@@ -329,7 +326,9 @@ local LocalAimbotConfig = {
     TargetParts = {"Torso"}, 
     radius = 150, 
     aimbotEnabled = true, 
-    fovVisible = true
+    fovVisible = true,
+    minInterval = 0.08, -- Rapid fire rate for instant hit
+    lastFire = 0
 }
 
 -- Function to get character name from NPCSFolder
@@ -924,10 +923,22 @@ BloodFolder.ChildRemoved:Connect(function(child)
 end)
 
 --------------------------------------------------------------------------------
--- METHOD 2 SILENT AIM ENGINE INTEGRATION
+-- METHOD 2 INSTANT SILENT AIM ENGINE (FULL DAMAGE THROUGH WALLS, NO TRAVEL DELAY)
 --------------------------------------------------------------------------------
 
--- Target Finder logic that links Role Detector system to Silent Aim
+-- Helper function to resolve equipped weapon
+local function resolveTool()
+    local char = lp.Character
+    if not char then return nil end
+    for _, child in ipairs(char:GetChildren()) do
+        if child:IsA("Tool") and child.Name ~= "Hands" then
+            return child
+        end
+    end
+    return nil
+end
+
+-- Target Finder logic linking Role Detector system to Silent Aim
 local function getSilentAimTarget()
     if not LocalAimbotConfig.aimbotEnabled then return nil end
 
@@ -1009,8 +1020,22 @@ local function getSilentAimTarget()
     return bestTarget
 end
 
--- METHOD 2 DIRECT REMOTE HOOK
--- Hooks RemoteEvent:FireServer / __namecall on ReplicatedStorage.gun_res.evt.inflict
+-- Direct Inflict Dispatcher (Bypasses FastCast Raycasting / Wall Damage Reduction)
+local function fireInflictDirect(target, tool)
+    if not target or not tool or not inflictRemote then return end
+    local hitPart = target.Part
+    
+    -- Send direct hit payload straight to server with 0 distance / point-blank hit pos
+    inflictRemote:FireServer(
+        tool,
+        target.Humanoid,
+        hitPart,
+        workspace:GetServerTimeNow(),
+        { pos = hitPart.Position, size = hitPart.Size }
+    )
+end
+
+-- METHOD 2 HOOK: Forces 100% full direct hit coordinates if gun script fires inflict
 local hookApplied = false
 
 if inflictRemote then
@@ -1021,6 +1046,7 @@ if inflictRemote then
                 if math.random(1, 100) <= LocalAimbotConfig.HitChance then
                     local target = getSilentAimTarget()
                     if target then
+                        -- Override hit payload to point-blank target part position
                         return oldFireServer(
                             self,
                             tool,
@@ -1065,35 +1091,38 @@ if inflictRemote then
     end
 end
 
--- Method 2 Direct Click Fallback Listener (Ensures execution when clicking with weapon equipped)
-local lastFireTime = 0
+-- Instant Hit Trigger on Mouse Click & Hold (From Script 2)
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed or not LocalAimbotConfig.aimbotEnabled then return end
     if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
     if UserInputService:GetFocusedTextBox() then return end
-    if tick() - lastFireTime < 0.1 then return end
 
-    if inflictRemote and lp.Character then
-        local tool = nil
-        for _, child in ipairs(lp.Character:GetChildren()) do
-            if child:IsA("Tool") and child.Name ~= "Hands" then
-                tool = child
-                break
-            end
-        end
+    if os.clock() - LocalAimbotConfig.lastFire < LocalAimbotConfig.minInterval then return end
+    
+    local target = getSilentAimTarget()
+    if not target then return end
+    
+    local tool = resolveTool()
+    if not tool then return end
 
-        if tool and math.random(1, 100) <= LocalAimbotConfig.HitChance then
-            local target = getSilentAimTarget()
-            if target then
-                lastFireTime = tick()
-                inflictRemote:FireServer(
-                    tool,
-                    target.Humanoid,
-                    target.Part,
-                    workspace:GetServerTimeNow(),
-                    { pos = target.Part.Position, size = target.Part.Size }
-                )
-            end
+    if math.random(1, 100) <= LocalAimbotConfig.HitChance then
+        LocalAimbotConfig.lastFire = os.clock()
+        fireInflictDirect(target, tool)
+    end
+end)
+
+-- Continuous Instant Hit Stream while holding Left Click
+RunService.Heartbeat:Connect(function()
+    if not LocalAimbotConfig.aimbotEnabled then return end
+    if not UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then return end
+    if UserInputService:GetFocusedTextBox() then return end
+
+    if os.clock() - LocalAimbotConfig.lastFire >= LocalAimbotConfig.minInterval then
+        local target = getSilentAimTarget()
+        local tool = resolveTool()
+        if target and tool and (math.random(1, 100) <= LocalAimbotConfig.HitChance) then
+            LocalAimbotConfig.lastFire = os.clock()
+            fireInflictDirect(target, tool)
         end
     end
 end)
