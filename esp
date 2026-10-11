@@ -287,8 +287,8 @@ local killerHintLabel = "KILLER + HINT MATCH"
 local Players = game:GetService("Players")
 local lp = Players.LocalPlayer
 local Workspace = game:GetService("Workspace")
-local NPCSFolder = Workspace:WaitForChild("NPCSFolder")
-local BloodFolder = Workspace:WaitForChild("BloodFolder")
+local NPCSFolder = Workspace:WaitForChild("NPCSFolder", 5)
+local BloodFolder = Workspace:WaitForChild("BloodFolder", 5)
 
 -- State variables
 local espEnabled = false
@@ -303,37 +303,49 @@ local playersWithStandardKillerWeapons = {}
 local droppedGunConnections = {}
 local playerRoles = {}
 
--- Function to get character name from NPCSFolder
-local function getCharacterName(player)
+-- Helper function to locate the data model (Character vs NPCSFolder)
+local function getModelForPlayer(player)
+    if player.Character and (player.Character:FindFirstChild("Configuration") or player.Character:FindFirstChild("AssignedTask")) then
+        return player.Character
+    end
     if NPCSFolder then
-        local playerNPCModel = NPCSFolder:FindFirstChild(player.Name)
-        if playerNPCModel then
-            local charNameValue = playerNPCModel:FindFirstChild("CharacterName") 
-                or playerNPCModel:FindFirstChild("NPCName")
-                or playerNPCModel:FindFirstChild("Name")
-            
-            if charNameValue and charNameValue:IsA("StringValue") then
-                return charNameValue.Value
-            end
-            
-            local configObject = playerNPCModel:FindFirstChild("Configuration")
-            if configObject then
-                local nameInConfig = configObject:FindFirstChild("CharacterName")
-                    or configObject:FindFirstChild("NPCName")
-                    or configObject:FindFirstChild("Name")
-                
-                if nameInConfig and nameInConfig:IsA("StringValue") then
-                    return nameInConfig.Value
-                end
-            end
-            
-            local humanoid = playerNPCModel:FindFirstChildOfClass("Humanoid")
-            if humanoid and humanoid.DisplayName ~= player.Name then
-                return humanoid.DisplayName
+        local npc = NPCSFolder:FindFirstChild(player.Name)
+        if npc then return npc end
+        local npcById = NPCSFolder:FindFirstChild(tostring(player.UserId))
+        if npcById then return npcById end
+    end
+    return player.Character
+end
+
+-- Function to get character name (checks player.Character first, then NPCSFolder)
+local function getCharacterName(player)
+    local targetModel = getModelForPlayer(player)
+    if targetModel then
+        local charNameValue = targetModel:FindFirstChild("CharacterName")
+            or targetModel:FindFirstChild("NPCName")
+            or targetModel:FindFirstChild("Name")
+
+        if charNameValue and charNameValue:IsA("StringValue") then
+            return charNameValue.Value
+        end
+
+        local configObject = targetModel:FindFirstChild("Configuration")
+        if configObject then
+            local nameInConfig = configObject:FindFirstChild("CharacterName")
+                or configObject:FindFirstChild("NPCName")
+                or configObject:FindFirstChild("Name")
+
+            if nameInConfig and nameInConfig:IsA("StringValue") then
+                return nameInConfig.Value
             end
         end
+
+        local humanoid = targetModel:FindFirstChildOfClass("Humanoid")
+        if humanoid and humanoid.DisplayName ~= player.Name then
+            return humanoid.DisplayName
+        end
     end
-    return player.Name 
+    return player.Name
 end
 
 local function tagPlayer(player, roleColor, labelText)
@@ -515,21 +527,27 @@ local function parseNewHintText(text)
     end
 end
 
+-- UPDATED: Reads traits and tasks from either player.Character or NPCSFolder
 local function updateMatchingHintPlayers()
     playersMatchingHints = {}
+
     local RSOD = lp:FindFirstChild("RSOD") or lp.PlayerGui:FindFirstChild("RSOD")
     if not RSOD then return end
+
     local HintsScrollFrame = RSOD:FindFirstChild("HintsScrollFrame")
     if not HintsScrollFrame then return end
 
     local targetConditions = {}
+
     for _, textLabel in ipairs(HintsScrollFrame:GetChildren()) do
         if textLabel.Name == "TextLaba" and textLabel:IsA("TextLabel") then
             local text = textLabel.Text
             if text and #text > 0 then
                 local targetNum, hintType, hintValue = parseNewHintText(text)
                 if hintValue and #hintValue > 0 then
-                    if not targetConditions[targetNum] then targetConditions[targetNum] = {} end
+                    if not targetConditions[targetNum] then
+                        targetConditions[targetNum] = {}
+                    end
                     table.insert(targetConditions[targetNum], { type = hintType, value = hintValue })
                 end
             end
@@ -537,38 +555,58 @@ local function updateMatchingHintPlayers()
     end
 
     if next(targetConditions) == nil then return end
-    if not NPCSFolder then return end
 
-    for _, player in Players:GetPlayers() do
+    for _, player in ipairs(Players:GetPlayers()) do
         if player ~= lp then
-            local playerNPCModel = NPCSFolder:FindFirstChild(player.Name)
-            if playerNPCModel then
-                local configObject = playerNPCModel:FindFirstChild("Configuration")
+            local dataModel = getModelForPlayer(player)
+            if dataModel then
+                local configObject = dataModel:FindFirstChild("Configuration") or dataModel:FindFirstChildOfClass("Configuration")
                 local playerMatchesAnyTarget = false
+
                 for targetNumber, conditionsForTarget in pairs(targetConditions) do
                     local playerMatchesAllConditionsForTarget = true
+
                     for _, condition in ipairs(conditionsForTarget) do
                         local conditionMet = false
+
                         if condition.type == "task" then
-                            local assignedTaskObject = playerNPCModel:FindFirstChild("AssignedTask")
-                            if assignedTaskObject and assignedTaskObject:IsA("StringValue") and assignedTaskObject.Value == condition.value then
-                                conditionMet = true
+                            local assignedTaskObject = dataModel:FindFirstChild("AssignedTask")
+                                or (configObject and configObject:FindFirstChild("AssignedTask"))
+                            if assignedTaskObject and assignedTaskObject:IsA("StringValue") then
+                                local cleanTask = assignedTaskObject.Value:match("^%s*(.-)%s*$")
+                                if cleanTask == condition.value then
+                                    conditionMet = true
+                                end
                             end
                         elseif condition.type == "trait" then
                             if configObject then
                                 for _, configChild in ipairs(configObject:GetChildren()) do
-                                    if configChild:IsA("StringValue") and configChild.Value == condition.value then
-                                        conditionMet = true
-                                        break
+                                    if configChild:IsA("StringValue") then
+                                        local cleanConfigVal = configChild.Value:match("^%s*(.-)%s*$")
+                                        if cleanConfigVal == condition.value then
+                                            conditionMet = true
+                                            break
+                                        end
                                     end
                                 end
                             end
                         end
-                        if not conditionMet then playerMatchesAllConditionsForTarget = false; break end
+
+                        if not conditionMet then
+                            playerMatchesAllConditionsForTarget = false
+                            break
+                        end
                     end
-                    if playerMatchesAllConditionsForTarget then playerMatchesAnyTarget = true; break end
+
+                    if playerMatchesAllConditionsForTarget then
+                        playerMatchesAnyTarget = true
+                        break
+                    end
                 end
-                if playerMatchesAnyTarget then playersMatchingHints[player] = true end
+
+                if playerMatchesAnyTarget then
+                    playersMatchingHints[player] = true
+                end
             end
         end
     end
@@ -649,7 +687,7 @@ local function detectRoles()
         if player ~= lp then otherPlayersWithCharCount = otherPlayersWithCharCount + 1 end
     end
 
-    local localNPC = NPCSFolder:FindFirstChild(lp.Name)
+    local localNPC = (NPCSFolder and NPCSFolder:FindFirstChild(lp.Name)) or lp.Character
     if localNPC then
         if localNPC:FindFirstChild("TEAM1") or localNPC:FindFirstChild("TEAM2") then
             everyoneHasGunConditionMet = true 
@@ -676,7 +714,7 @@ local function detectRoles()
                 elseif localNPC:FindFirstChild("TEAM2") then localTeam = "TEAM2" end
             end
             for player, _ in pairs(playersWithValidCharacters) do
-                local playerNPC = NPCSFolder:FindFirstChild(player.Name)
+                local playerNPC = getModelForPlayer(player)
                 if playerNPC and localTeam then
                     if playerNPC:FindFirstChild(localTeam) then lockedTeamRoles[player] = "Innocent"
                     else lockedTeamRoles[player] = "Killer" end
@@ -816,9 +854,11 @@ Tab:CreateButton({
 
 Tab:CreateButton({Name = "Disable ESP", Callback = disableEsp})
 
-BloodFolder.ChildRemoved:Connect(function(child)
-    if child:IsA("Tool") then
-        clearDroppedGunEsp(child)
-        if droppedGunConnections[child] then droppedGunConnections[child]:Disconnect(); droppedGunConnections[child] = nil end
-    end
-end)
+if BloodFolder then
+    BloodFolder.ChildRemoved:Connect(function(child)
+        if child:IsA("Tool") then
+            clearDroppedGunEsp(child)
+            if droppedGunConnections[child] then droppedGunConnections[child]:Disconnect(); droppedGunConnections[child] = nil end
+        end
+    end)
+end
