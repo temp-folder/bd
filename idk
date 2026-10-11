@@ -313,6 +313,20 @@ local playerRoles = {}
 -- Aimbot targeting modes
 local bulletRedirectionModes = {"Killer"} 
 
+-- Helper function to locate the data model (Character vs NPCSFolder)
+local function getModelForPlayer(player)
+    if player.Character and (player.Character:FindFirstChild("Configuration") or player.Character:FindFirstChild("AssignedTask")) then
+        return player.Character
+    end
+    if NPCSFolder then
+        local npc = NPCSFolder:FindFirstChild(player.Name)
+        if npc then return npc end
+        local npcById = NPCSFolder:FindFirstChild(tostring(player.UserId))
+        if npcById then return npcById end
+    end
+    return player.Character
+end
+
 -- Function to get character name from NPCSFolder
 local function getCharacterName(player)
     if NPCSFolder then
@@ -534,13 +548,13 @@ local function parseNewHintText(text)
     end
 end
 
--- UPDATED: Read hints from RSOD > HintsScrollFrame > TextLaba
+-- UPDATED: Reads traits and tasks from either player.Character or NPCSFolder
 local function updateMatchingHintPlayers()
     playersMatchingHints = {}
 
     local RSOD = lp:FindFirstChild("RSOD") or lp.PlayerGui:FindFirstChild("RSOD")
     if not RSOD then return end
-    
+
     local HintsScrollFrame = RSOD:FindFirstChild("HintsScrollFrame")
     if not HintsScrollFrame then return end
 
@@ -562,13 +576,12 @@ local function updateMatchingHintPlayers()
     end
 
     if next(targetConditions) == nil then return end
-    if not NPCSFolder then return end
 
-    for _, player in Players:GetPlayers() do
+    for _, player in ipairs(Players:GetPlayers()) do
         if player ~= lp then
-            local playerNPCModel = NPCSFolder:FindFirstChild(player.Name)
-            if playerNPCModel then
-                local configObject = playerNPCModel:FindFirstChild("Configuration")
+            local dataModel = getModelForPlayer(player)
+            if dataModel then
+                local configObject = dataModel:FindFirstChild("Configuration") or dataModel:FindFirstChildOfClass("Configuration")
                 local playerMatchesAnyTarget = false
 
                 for targetNumber, conditionsForTarget in pairs(targetConditions) do
@@ -578,16 +591,23 @@ local function updateMatchingHintPlayers()
                         local conditionMet = false
 
                         if condition.type == "task" then
-                            local assignedTaskObject = playerNPCModel:FindFirstChild("AssignedTask")
-                            if assignedTaskObject and assignedTaskObject:IsA("StringValue") and assignedTaskObject.Value == condition.value then
-                                conditionMet = true
+                            local assignedTaskObject = dataModel:FindFirstChild("AssignedTask")
+                                or (configObject and configObject:FindFirstChild("AssignedTask"))
+                            if assignedTaskObject and assignedTaskObject:IsA("StringValue") then
+                                local cleanTask = assignedTaskObject.Value:match("^%s*(.-)%s*$")
+                                if cleanTask == condition.value then
+                                    conditionMet = true
+                                end
                             end
                         elseif condition.type == "trait" then
                             if configObject then
                                 for _, configChild in ipairs(configObject:GetChildren()) do
-                                    if configChild:IsA("StringValue") and configChild.Value == condition.value then
-                                        conditionMet = true
-                                        break
+                                    if configChild:IsA("StringValue") then
+                                        local cleanConfigVal = configChild.Value:match("^%s*(.-)%s*$")
+                                        if cleanConfigVal == condition.value then
+                                            conditionMet = true
+                                            break
+                                        end
                                     end
                                 end
                             end
